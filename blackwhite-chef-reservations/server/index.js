@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = 3001;
@@ -9,6 +11,16 @@ app.use(cors());
 app.use(express.json());
 
 const CATCHTABLE_URL = 'https://app.catchtable.co.kr/ct/curation/culinaryclasswars2';
+
+// 매장명 -> shopId 매핑 로드
+let shopMapping = {};
+try {
+  const mappingPath = path.join(__dirname, 'shopMapping.json');
+  shopMapping = JSON.parse(fs.readFileSync(mappingPath, 'utf8'));
+  console.log(`${Object.keys(shopMapping).length}개 매장 매핑 로드됨`);
+} catch (e) {
+  console.log('매핑 파일 없음, 검색 링크 사용');
+}
 
 let browser = null;
 let cachedData = null;
@@ -44,7 +56,7 @@ async function scrapeRestaurants() {
     let noChangeCount = 0;
 
     while (scrollCount < maxScrolls && noChangeCount < 5) {
-      // 현재 보이는 매장 정보 수집
+      // 텍스트에서 매장 정보 수집
       const items = await page.evaluate(() => {
         const results = [];
         const text = document.body.innerText;
@@ -57,54 +69,30 @@ async function scrapeRestaurants() {
             const item = { chef };
             i++;
 
-            // 다음 몇 줄에서 정보 추출
             for (let j = 0; j < 20 && i + j < lines.length; j++) {
               const line = lines[i + j];
               if (line.startsWith('흑백요리사2:')) break;
 
-              // 평점
-              if (/^\d\.\d$/.test(line)) {
-                item.rating = line;
-              }
-              // 리뷰 수
-              if (/^\([\d,]+\)$/.test(line)) {
-                item.reviewCount = line.replace(/[()]/g, '');
-              }
-              // 위치 · 음식종류
+              if (/^\d\.\d$/.test(line)) item.rating = line;
+              if (/^\([\d,]+\)$/.test(line)) item.reviewCount = line.replace(/[()]/g, '');
+
               const locMatch = line.match(/^([가-힣a-zA-Z0-9]+)\s*·\s*([가-힣a-zA-Z]+)$/);
               if (locMatch) {
                 item.location = locMatch[1];
                 item.cuisine = locMatch[2];
               }
-              // 미쉐린
+
               if (line.includes('미쉐린') && line.includes('스타')) {
                 const starMatch = line.match(/(\d)스타/);
                 if (starMatch) item.michelinStar = starMatch[1];
               }
-              if (line.includes('빕구르망')) {
-                item.michelinBib = true;
-              }
-              // 예약 마감
-              if (line.includes('주간 예약이 마감')) {
-                item.reservationStatus = line;
-              }
-              // 예약 오픈
-              if (line.includes('예약 오픈')) {
-                item.reservationOpenTime = line;
-              }
-              // 예약 가능
-              if (line.includes('예약 가능합니다')) {
-                item.reservationPeriod = line;
-              }
-              // 가격
-              if (line.match(/(점심|저녁|동일가).*만원/)) {
-                item.priceInfo = line;
-              }
-              // 영업시간
-              if (line.match(/영업중|영업 전|영업 종료/) && line.includes('•')) {
-                item.hours = line;
-              }
-              // 매장명 추출
+              if (line.includes('빕구르망')) item.michelinBib = true;
+              if (line.includes('주간 예약이 마감')) item.reservationStatus = line;
+              if (line.includes('예약 오픈')) item.reservationOpenTime = line;
+              if (line.includes('예약 가능합니다')) item.reservationPeriod = line;
+              if (line.match(/(점심|저녁|동일가).*만원/)) item.priceInfo = line;
+              if (line.match(/영업중|영업 전|영업 종료/) && line.includes('•')) item.hours = line;
+
               if (!item.name && line.length > 1 && line.length < 40) {
                 const skipPatterns = [
                   /^\d/, /^(예약|미쉐린|영업|점심|저녁|Taste|흑백|·|사진|신규)/,
@@ -125,26 +113,10 @@ async function scrapeRestaurants() {
         return results;
       });
 
-      // 링크 수집
-      const links = await page.evaluate(() => {
-        const result = [];
-        document.querySelectorAll('a[href*="/shop/"]').forEach(a => {
-          const match = a.href.match(/\/shop\/([^/?]+)/);
-          if (match) {
-            result.push({ shopId: match[1], url: a.href });
-          }
-        });
-        return [...new Map(result.map(l => [l.shopId, l])).values()];
-      });
-
       // 기존 데이터에 추가 (중복 제거)
-      items.forEach((item, idx) => {
+      items.forEach(item => {
         const key = `${item.chef}|${item.name}`;
         if (!restaurants.find(r => `${r.chef}|${r.name}` === key)) {
-          if (links[idx]) {
-            item.shopId = links[idx].shopId;
-            item.shopUrl = links[idx].url;
-          }
           restaurants.push(item);
         }
       });
@@ -177,6 +149,16 @@ async function scrapeRestaurants() {
         console.log(`스크롤 ${scrollCount}회, 매장 ${restaurants.length}개 수집`);
       }
     }
+
+    // 매핑 적용
+    restaurants.forEach(r => {
+      if (r.name && shopMapping[r.name]) {
+        r.shopId = shopMapping[r.name];
+        r.shopUrl = `https://app.catchtable.co.kr/ct/shop/${shopMapping[r.name]}`;
+      } else if (r.name) {
+        r.shopUrl = `https://app.catchtable.co.kr/ct/search?keyword=${encodeURIComponent(r.name)}`;
+      }
+    });
 
     console.log(`총 ${restaurants.length}개 매장 수집 완료`);
     return restaurants;
