@@ -1,0 +1,27 @@
+{
+    "itad_api_key": "d435d03daba197c1937185f0629b25654ebde48c",
+    "stores": ["steam", "epic", "gog"],
+    "check_interval_hours": 6,
+    "steam": {
+        "enabled": true,
+        "asf_url": "http://localhost:1242",
+        "asf_password": "",
+        "bot_name": "main"
+    },
+    "epic": {
+        "enabled": true,
+        "email": "",
+        "totp_secret": "",
+        "headless": false
+    },
+    "gog": {
+        "enabled": false,
+        "email": "",
+        "headless": false
+    },
+    "notifications": {
+        "discord_webhook": "",
+        "telegram_bot_token": "",
+        "telegram_chat_id": ""
+    }
+}

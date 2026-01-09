@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>건강검진 결과 추이</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        /* 파일 업로드 영역 */
+        .upload-section {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+
+        .upload-section h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            margin: 20px 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #f8f9ff;
+        }
+
+        .upload-area:hover {
+            background: #eef0ff;
+            border-color: #764ba2;
+        }
+
+        .upload-area.dragover {
+            background: #e0e5ff;
+            border-color: #764ba2;
+        }
+
+        .upload-area input[type="file"] {
+            display: none;
+        }
+
+        .upload-icon {
+            font-size: 3em;
+            margin-bottom: 15px;
+        }
+
+        .upload-text {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .upload-text span {
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        .file-info {
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: #e8f5e9;
+            border-radius: 8px;
+            color: #2e7d32;
+            display: none;
+        }
+
+        .template-section {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+
+        .template-btn {
+            padding: 12px 24px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: all 0.3s ease;
+        }
+
+        .template-btn:hover {
+            background: #43a047;
+            transform: translateY(-2px);
+        }
+
+        .format-info {
+            margin-top: 15px;
+            text-align: left;
+            background: #fff3e0;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 0.9em;
+            color: #e65100;
+        }
+
+        .format-info code {
+            background: #ffe0b2;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        /* 결과 영역 */
+        .results-section {
+            display: none;
+        }
+
+        .results-section.visible {
+            display: block;
+        }
+
+        .category-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .tab-btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 25px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            cursor: pointer;
+            font-size: 1em;
+            transition: all 0.3s ease;
+        }
+
+        .tab-btn:hover, .tab-btn.active {
+            background: white;
+            color: #667eea;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 20px;
+        }
+
+        .chart-card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .chart-title {
+            font-size: 1.2em;
+            color: #333;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .chart-title .range {
+            font-size: 0.8em;
+            color: #888;
+            font-weight: normal;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 250px;
+        }
+
+        .legend-info {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85em;
+            color: white;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 12px;
+            border-radius: 3px;
+        }
+
+        .legend-color.normal {
+            background: rgba(102, 126, 234, 0.3);
+            border: 2px solid #667eea;
+        }
+
+        .legend-color.warning {
+            background: #ff6b6b;
+            border-radius: 50%;
+            width: 12px;
+            height: 12px;
+        }
+
+        .legend-color.safe-zone {
+            background: rgba(76, 175, 80, 0.4);
+        }
+
+        .data-table {
+            margin-top: 30px;
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            overflow-x: auto;
+        }
+
+        .data-table h2 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            padding: 12px 15px;
+            text-align: center;
+            border-bottom: 1px solid #eee;
+        }
+
+        th {
+            background: #667eea;
+            color: white;
+        }
+
+        th:first-child, td:first-child {
+            text-align: left;
+        }
+
+        tr:hover {
+            background: #f5f5f5;
+        }
+
+        .out-of-range {
+            color: #ff4444;
+            font-weight: bold;
+            background: rgba(255, 68, 68, 0.1);
+            border-radius: 5px;
+            padding: 3px 8px;
+        }
+
+        .in-range {
+            color: #4CAF50;
+        }
+
+        .reset-btn {
+            display: block;
+            margin: 20px auto;
+            padding: 12px 30px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 2px solid white;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: all 0.3s ease;
+        }
+
+        .reset-btn:hover {
+            background: white;
+            color: #667eea;
+        }
+
+        @media (max-width: 768px) {
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+
+            h1 {
+                font-size: 1.8em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>건강검진 결과 추이</h1>
+
+        <!-- 파일 업로드 섹션 -->
+        <div class="upload-section" id="upload-section">
+            <h2>엑셀 파일 업로드</h2>
+            <div class="upload-area" id="upload-area">
+                <div class="upload-icon">📁</div>
+                <div class="upload-text">
+                    클릭하거나 파일을 드래그하세요<br>
+                    <span>.xlsx, .xls 파일 지원</span>
+                </div>
+                <input type="file" id="file-input" accept=".xlsx,.xls">
+            </div>
+            <div class="file-info" id="file-info"></div>
+
+            <div class="template-section">
+                <button class="template-btn" onclick="downloadTemplate()">
+                    📥 샘플 템플릿 다운로드
+                </button>
+                <div class="format-info">
+                    <strong>📋 엑셀 파일 형식 안내:</strong><br><br>
+                    • <strong>1행</strong>: 헤더 (카테고리, 검사항목, 날짜들..., 최소, 최대)<br>
+                    • <strong>A열</strong>: 카테고리 (간기능검사, 췌장검사 등)<br>
+                    • <strong>B열</strong>: 검사항목명<br>
+                    • <strong>C열~</strong>: 날짜별 검사값<br>
+                    • <strong>마지막 2열</strong>: 최소, 최대 참고치
+                </div>
+            </div>
+        </div>
+
+        <!-- 결과 섹션 -->
+        <div class="results-section" id="results-section">
+            <button class="reset-btn" onclick="resetUpload()">🔄 새 파일 업로드</button>
+
+            <div class="legend-info">
+                <div class="legend-item">
+                    <div class="legend-color safe-zone"></div>
+                    <span>정상 범위</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color warning"></div>
+                    <span>참고치 초과/미달</span>
+                </div>
+            </div>
+
+            <div class="category-tabs" id="category-tabs">
+                <!-- 동적으로 탭 생성 -->
+            </div>
+
+            <div id="charts-container">
+                <!-- 동적으로 차트 생성 -->
+            </div>
+
+            <div class="data-table">
+                <h2>📊 전체 데이터 테이블</h2>
+                <table id="data-table">
+                    <thead id="table-head">
+                    </thead>
+                    <tbody id="table-body">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let parsedData = {
+            dates: [],
+            categories: {},
+            allItems: []
+        };
+        let chartInstances = [];
+
+        // 파일 업로드 이벤트
+        const uploadArea = document.getElementById('upload-area');
+        const fileInput = document.getElementById('file-input');
+        const fileInfo = document.getElementById('file-info');
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file) handleFile(file);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) handleFile(file);
+        });
+
+        // 파일 처리
+        function handleFile(file) {
+            if (!file.name.match(/\.(xlsx|xls)$/i)) {
+                alert('엑셀 파일(.xlsx, .xls)만 업로드 가능합니다.');
+                return;
+            }
+
+            fileInfo.style.display = 'block';
+            fileInfo.textContent = `📄 ${file.name} 로딩 중...`;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+
+                    parseExcelData(jsonData);
+                    fileInfo.textContent = `✅ ${file.name} 로딩 완료!`;
+
+                    setTimeout(() => {
+                        showResults();
+                    }, 500);
+                } catch (error) {
+                    console.error(error);
+                    fileInfo.style.background = '#ffebee';
+                    fileInfo.style.color = '#c62828';
+                    fileInfo.textContent = `❌ 파일 파싱 오류: ${error.message}`;
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // 엑셀 데이터 파싱
+        function parseExcelData(jsonData) {
+            parsedData = {
+                dates: [],
+                categories: {},
+                allItems: []
+            };
+
+            // 헤더 행 찾기 (최소/최대가 있는 행)
+            let headerRowIdx = -1;
+            for (let i = 0; i < Math.min(10, jsonData.length); i++) {
+                const row = jsonData[i];
+                if (row && row.some(cell => cell && cell.toString().includes('최소'))) {
+                    headerRowIdx = i;
+                    break;
+                }
+            }
+
+            if (headerRowIdx === -1) {
+                throw new Error('헤더 행을 찾을 수 없습니다. "최소" 열이 있는지 확인하세요.');
+            }
+
+            const header = jsonData[headerRowIdx];
+            console.log('Header row:', headerRowIdx, header);
+
+            // 최소/최대 열 인덱스 찾기
+            const minIdx = header.findIndex(h => h && h.toString().includes('최소'));
+            const maxIdx = header.findIndex(h => h && h.toString().includes('최대'));
+
+            if (minIdx === -1 || maxIdx === -1) {
+                throw new Error('최소/최대 열을 찾을 수 없습니다.');
+            }
+
+            // 날짜 컬럼 찾기 (숫자이거나 날짜 형식인 셀들)
+            let dateStartIdx = -1;
+            let dateEndIdx = minIdx;
+
+            for (let i = 0; i < minIdx; i++) {
+                const cell = header[i];
+                if (cell !== null && cell !== undefined && cell !== '') {
+                    // Excel 시리얼 넘버(숫자)이거나 날짜 문자열인 경우
+                    if (typeof cell === 'number' || (typeof cell === 'string' && cell.match(/\d{4}[-\/]\d{1,2}[-\/]\d{1,2}/))) {
+                        if (dateStartIdx === -1) dateStartIdx = i;
+                    }
+                }
+            }
+
+            if (dateStartIdx === -1) {
+                throw new Error('날짜 열을 찾을 수 없습니다.');
+            }
+
+            // 날짜 추출
+            for (let i = dateStartIdx; i < dateEndIdx; i++) {
+                const cell = header[i];
+                if (cell !== null && cell !== undefined && cell !== '') {
+                    const dateStr = normalizeDate(cell);
+                    parsedData.dates.push(dateStr);
+                }
+            }
+
+            console.log('Dates found:', parsedData.dates);
+            console.log('Date columns:', dateStartIdx, 'to', dateEndIdx - 1);
+
+            // 검사항목명 열 찾기 (날짜 시작 바로 앞 열)
+            const itemNameIdx = dateStartIdx - 1;
+
+            // 데이터 행 파싱
+            let currentMainCategory = '기타';  // 대분류 (A열)
+            let currentSubCategory = '기타';   // 중분류 (B열)
+
+            for (let i = headerRowIdx + 1; i < jsonData.length; i++) {
+                const row = jsonData[i];
+                if (!row || row.length === 0) continue;
+
+                // 대분류 확인 (A열, index 0)
+                if (row[0] && row[0].toString().trim()) {
+                    currentMainCategory = row[0].toString().trim();
+                }
+
+                // 중분류 확인 (B열, index 1) - 있으면 카테고리로 사용
+                if (row[1] && row[1].toString().trim()) {
+                    currentSubCategory = row[1].toString().trim();
+                }
+
+                // 검사항목명 (날짜 시작 바로 앞 열)
+                const itemName = row[itemNameIdx];
+                if (!itemName || itemName.toString().trim() === '') continue;
+
+                // 카테고리 결정 (중분류 사용, 없으면 대분류)
+                const category = currentSubCategory || currentMainCategory;
+
+                // 카테고리 초기화
+                if (!parsedData.categories[category]) {
+                    parsedData.categories[category] = [];
+                }
+
+                // 값 추출
+                const values = [];
+                for (let j = dateStartIdx; j < dateStartIdx + parsedData.dates.length; j++) {
+                    const val = row[j];
+                    if (val === undefined || val === null || val === '' || val === '-') {
+                        values.push(null);
+                    } else {
+                        const numVal = parseFloat(val);
+                        values.push(isNaN(numVal) ? null : numVal);
+                    }
+                }
+
+                // 참고치 추출
+                let min = 0, max = 100;
+                if (row[minIdx] !== undefined && row[minIdx] !== '' && row[minIdx] !== null) {
+                    const minVal = parseFloat(row[minIdx]);
+                    if (!isNaN(minVal)) min = minVal;
+                }
+                if (row[maxIdx] !== undefined && row[maxIdx] !== '' && row[maxIdx] !== null) {
+                    const maxVal = parseFloat(row[maxIdx]);
+                    if (!isNaN(maxVal)) max = maxVal;
+                }
+
+                const item = {
+                    name: itemName.toString().trim(),
+                    values: values,
+                    min: min,
+                    max: max,
+                    category: category
+                };
+
+                parsedData.categories[category].push(item);
+                parsedData.allItems.push(item);
+            }
+
+            console.log('Parsed data:', parsedData);
+
+            if (parsedData.allItems.length === 0) {
+                throw new Error('파싱된 데이터가 없습니다. 엑셀 파일 형식을 확인하세요.');
+            }
+        }
+
+        // 날짜 형식 정규화
+        function normalizeDate(dateStr) {
+            // 숫자인 경우 (Excel 날짜 시리얼)
+            if (typeof dateStr === 'number') {
+                const date = new Date((dateStr - 25569) * 86400 * 1000);
+                return date.toISOString().split('T')[0];
+            }
+
+            dateStr = dateStr.toString().trim();
+
+            // 다양한 형식 처리
+            // 23/8/28 -> 2023-08-28
+            const shortMatch = dateStr.match(/^(\d{2})\/(\d{1,2})\/(\d{1,2})$/);
+            if (shortMatch) {
+                const year = 2000 + parseInt(shortMatch[1]);
+                const month = shortMatch[2].padStart(2, '0');
+                const day = shortMatch[3].padStart(2, '0');
+                return `${year}-${month}-${day}`;
+            }
+
+            // 2021-08-28 형식은 그대로
+            if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                return dateStr;
+            }
+
+            // 2021/08/28 -> 2021-08-28
+            const slashMatch = dateStr.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+            if (slashMatch) {
+                return `${slashMatch[1]}-${slashMatch[2].padStart(2, '0')}-${slashMatch[3].padStart(2, '0')}`;
+            }
+
+            return dateStr;
+        }
+
+        // 결과 표시
+        function showResults() {
+            document.getElementById('upload-section').style.display = 'none';
+            document.getElementById('results-section').classList.add('visible');
+
+            renderCategoryTabs();
+            renderAllCharts();
+            renderDataTable();
+        }
+
+        // 카테고리 탭 생성
+        function renderCategoryTabs() {
+            const tabsContainer = document.getElementById('category-tabs');
+            tabsContainer.innerHTML = '';
+
+            const categories = Object.keys(parsedData.categories);
+            categories.forEach((category, idx) => {
+                const btn = document.createElement('button');
+                btn.className = 'tab-btn' + (idx === 0 ? ' active' : '');
+                btn.textContent = category;
+                btn.onclick = () => showCategory(category, btn);
+                tabsContainer.appendChild(btn);
+            });
+        }
+
+        // 카테고리 전환
+        function showCategory(category, btn) {
+            // 탭 활성화
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            // 차트 표시/숨김
+            document.querySelectorAll('.category-charts').forEach(container => {
+                container.style.display = 'none';
+            });
+            const targetId = `charts-${category.replace(/[^a-zA-Z0-9가-힣]/g, '')}`;
+            const target = document.getElementById(targetId);
+            if (target) {
+                target.style.display = 'grid';
+            }
+        }
+
+        // 모든 차트 렌더링
+        function renderAllCharts() {
+            // 기존 차트 제거
+            chartInstances.forEach(chart => chart.destroy());
+            chartInstances = [];
+
+            const chartsContainer = document.getElementById('charts-container');
+            chartsContainer.innerHTML = '';
+
+            const categories = Object.keys(parsedData.categories);
+            categories.forEach((category, idx) => {
+                const categoryDiv = document.createElement('div');
+                categoryDiv.id = `charts-${category.replace(/[^a-zA-Z0-9가-힣]/g, '')}`;
+                categoryDiv.className = 'charts-grid category-charts';
+                categoryDiv.style.display = idx === 0 ? 'grid' : 'none';
+                chartsContainer.appendChild(categoryDiv);
+
+                parsedData.categories[category].forEach(item => {
+                    createChart(categoryDiv, item);
+                });
+            });
+        }
+
+        // 차트 생성
+        function createChart(container, item) {
+            const card = document.createElement('div');
+            card.className = 'chart-card';
+
+            const chartId = `chart-${Math.random().toString(36).substr(2, 9)}`;
+            card.innerHTML = `
+                <div class="chart-title">
+                    ${item.name}
+                    <span class="range">(참고치: ${item.min} - ${item.max})</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="${chartId}"></canvas>
+                </div>
+            `;
+            container.appendChild(card);
+
+            const ctx = document.getElementById(chartId).getContext('2d');
+
+            // 유효한 값만 필터링하여 범위 계산
+            const validValues = item.values.filter(v => v !== null && !isNaN(v));
+            const minValue = validValues.length > 0 ? Math.min(...validValues) : item.min;
+            const maxValue = validValues.length > 0 ? Math.max(...validValues) : item.max;
+
+            // 참고치 범위를 벗어난 값 체크
+            const pointColors = item.values.map(v => {
+                if (v === null || isNaN(v)) return '#999';
+                return (v < item.min || v > item.max) ? '#ff4444' : '#667eea';
+            });
+
+            const pointRadius = item.values.map(v => {
+                if (v === null || isNaN(v)) return 0;
+                return (v < item.min || v > item.max) ? 10 : 5;
+            });
+
+            const pointBorderWidth = item.values.map(v => {
+                if (v === null || isNaN(v)) return 0;
+                return (v < item.min || v > item.max) ? 3 : 2;
+            });
+
+            const chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: parsedData.dates,
+                    datasets: [{
+                        label: item.name,
+                        data: item.values,
+                        borderColor: '#667eea',
+                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        borderWidth: 3,
+                        pointBackgroundColor: pointColors,
+                        pointBorderColor: pointColors.map(c => c === '#ff4444' ? '#ff0000' : c),
+                        pointRadius: pointRadius,
+                        pointBorderWidth: pointBorderWidth,
+                        pointHoverRadius: 12,
+                        fill: true,
+                        tension: 0.3,
+                        spanGaps: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        annotation: {
+                            annotations: {
+                                box1: {
+                                    type: 'box',
+                                    yMin: item.min,
+                                    yMax: item.max,
+                                    backgroundColor: 'rgba(76, 175, 80, 0.15)',
+                                    borderColor: 'rgba(76, 175, 80, 0.3)',
+                                    borderWidth: 1
+                                },
+                                minLine: {
+                                    type: 'line',
+                                    yMin: item.min,
+                                    yMax: item.min,
+                                    borderColor: 'rgba(76, 175, 80, 0.7)',
+                                    borderWidth: 2,
+                                    borderDash: [6, 4],
+                                    label: {
+                                        display: true,
+                                        content: `최소: ${item.min}`,
+                                        position: 'start',
+                                        backgroundColor: 'rgba(76, 175, 80, 0.9)',
+                                        font: { size: 11, weight: 'bold' }
+                                    }
+                                },
+                                maxLine: {
+                                    type: 'line',
+                                    yMin: item.max,
+                                    yMax: item.max,
+                                    borderColor: 'rgba(255, 68, 68, 0.7)',
+                                    borderWidth: 2,
+                                    borderDash: [6, 4],
+                                    label: {
+                                        display: true,
+                                        content: `최대: ${item.max}`,
+                                        position: 'start',
+                                        backgroundColor: 'rgba(255, 68, 68, 0.9)',
+                                        font: { size: 11, weight: 'bold' }
+                                    }
+                                }
+                            }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                afterLabel: function(context) {
+                                    const value = context.parsed.y;
+                                    if (value === null) return '';
+                                    if (value < item.min) {
+                                        return `⚠️ 최소 참고치(${item.min}) 미달`;
+                                    } else if (value > item.max) {
+                                        return `⚠️ 최대 참고치(${item.max}) 초과`;
+                                    }
+                                    return '✅ 정상 범위';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            suggestedMin: Math.min(item.min * 0.8, minValue * 0.9),
+                            suggestedMax: Math.max(item.max * 1.2, maxValue * 1.1),
+                            grid: {
+                                color: 'rgba(0, 0, 0, 0.05)'
+                            }
+                        },
+                        x: {
+                            grid: {
+                                display: false
+                            }
+                        }
+                    }
+                }
+            });
+
+            chartInstances.push(chart);
+        }
+
+        // 데이터 테이블 렌더링
+        function renderDataTable() {
+            const thead = document.getElementById('table-head');
+            const tbody = document.getElementById('table-body');
+
+            // 헤더
+            let headerHtml = '<tr><th>카테고리</th><th>검사항목</th>';
+            parsedData.dates.forEach(date => {
+                headerHtml += `<th>${date}</th>`;
+            });
+            headerHtml += '<th>참고치</th></tr>';
+            thead.innerHTML = headerHtml;
+
+            // 바디
+            tbody.innerHTML = '';
+            parsedData.allItems.forEach(item => {
+                const row = document.createElement('tr');
+
+                let cells = `<td>${item.category}</td><td><strong>${item.name}</strong></td>`;
+
+                item.values.forEach(value => {
+                    if (value === null || isNaN(value)) {
+                        cells += '<td>-</td>';
+                    } else {
+                        const isOutOfRange = value < item.min || value > item.max;
+                        const className = isOutOfRange ? 'out-of-range' : 'in-range';
+                        cells += `<td><span class="${className}">${value}</span></td>`;
+                    }
+                });
+
+                cells += `<td>${item.min} - ${item.max}</td>`;
+
+                row.innerHTML = cells;
+                tbody.appendChild(row);
+            });
+        }
+
+        // 업로드 리셋
+        function resetUpload() {
+            document.getElementById('upload-section').style.display = 'block';
+            document.getElementById('results-section').classList.remove('visible');
+            document.getElementById('file-info').style.display = 'none';
+            fileInput.value = '';
+
+            chartInstances.forEach(chart => chart.destroy());
+            chartInstances = [];
+        }
+
+        // 샘플 템플릿 다운로드
+        function downloadTemplate() {
+            const templateData = [
+                ['카테고리', '검사항목', '2021-08-28', '2022-08-28', '2023-08-28', '2024-08-28', '2025-08-28', '최소', '최대'],
+                ['간기능검사', '총단백량', 8, 8, 7, 8, 8, 6.7, 8.1],
+                ['간기능검사', '알부민', 5, 5, 4.5, 4.5, 5, 4.1, 5.1],
+                ['간기능검사', '글로불린', 4, 3, 3, 4, 4, 2.2, 4],
+                ['간기능검사', '알부민/글로불린 비율', 2, 2, 2, 2, 2, 1.2, 2],
+                ['간기능검사', 'AST(SGOT)', 29, 28, 18, 16, 32, 0, 35],
+                ['간기능검사', 'ALT(SGPT)', 21, 17, 16, 14, 27, 0, 40],
+                ['간기능검사', '감마지티피(γ-GTP)', 27, 30, 27, 13, 14, 0, 35],
+                ['췌장검사', 'ALP', 81, 57, 93, 92, 100, 36, 100],
+                ['췌장검사', '총빌리루빈', 2.0, 1.5, 2.0, 2.0, 2.0, 0, 1.9],
+                ['췌장검사', '직접빌리루빈', 0.3, 0.3, 0.3, 0.4, 0.5, 0, 0.5],
+                ['췌장검사', '간접빌리루빈', 1.0, 1.0, 1.1, 1.0, 1.0, 0.2, 1.4],
+                ['간염검사', 'B형간염항원', 0, 0, 0, 0, 0, 0, 1],
+            ];
+
+            const ws = XLSX.utils.aoa_to_array ?
+                XLSX.utils.aoa_to_sheet(templateData) :
+                XLSX.utils.aoa_to_sheet(templateData);
+
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, '건강검진');
+
+            // 컬럼 너비 설정
+            ws['!cols'] = [
+                { wch: 12 },  // 카테고리
+                { wch: 20 },  // 검사항목
+                { wch: 12 },  // 날짜1
+                { wch: 12 },  // 날짜2
+                { wch: 12 },  // 날짜3
+                { wch: 12 },  // 날짜4
+                { wch: 12 },  // 날짜5
+                { wch: 8 },   // 최소
+                { wch: 8 },   // 최대
+            ];
+
+            XLSX.writeFile(wb, '건강검진_템플릿.xlsx');
+        }
+    </script>
+</body>
+</html>
