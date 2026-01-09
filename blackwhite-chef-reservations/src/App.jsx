@@ -36,8 +36,9 @@ function App() {
   }
 
   const filtered = restaurants.filter(r => {
-    if (filter === 'available') return !r.reservationStatus?.includes('마감')
-    if (filter === 'michelin') return r.michelinStar || r.michelinBib
+    if (filter === 'available') {
+      return r.availableDates?.length > 0 || !r.reservationStatus?.includes('마감')
+    }
     return true
   })
 
@@ -62,12 +63,6 @@ function App() {
           >
             예약 가능
           </button>
-          <button
-            className={filter === 'michelin' ? 'active' : ''}
-            onClick={() => setFilter('michelin')}
-          >
-            미쉐린
-          </button>
         </div>
         <button className="refresh-btn" onClick={refresh} disabled={loading}>
           {loading ? '로딩 중...' : '새로고침'}
@@ -87,11 +82,7 @@ function App() {
           {filtered.map((r, i) => (
             <div key={i} className="restaurant-card">
               <div className="card-header">
-                <div className="chef-info">
-                  <span className="chef-name">{r.chef}</span>
-                  {r.michelinStar && <span className="michelin">⭐ {r.michelinStar}스타</span>}
-                  {r.michelinBib && <span className="michelin bib">빕구르망</span>}
-                </div>
+                <span className="chef-name">{r.chef}</span>
                 <h2 className="shop-name">{r.name || '매장명 미확인'}</h2>
               </div>
 
@@ -112,16 +103,29 @@ function App() {
                 {r.hours && <div className="hours">{r.hours}</div>}
 
                 <div className="reservation-info">
-                  {r.reservationStatus && (
-                    <div className={`status ${r.reservationStatus.includes('마감') ? 'closed' : 'open'}`}>
-                      {r.reservationStatus}
-                    </div>
-                  )}
-                  {r.reservationOpenTime && (
-                    <div className="open-time">🕐 {r.reservationOpenTime}</div>
-                  )}
-                  {r.reservationPeriod && (
-                    <div className="period">📅 {r.reservationPeriod}</div>
+                  {(r.availableDates?.length > 0) ? (
+                    <>
+                      <div className="status open">예약 가능</div>
+                      <div className="available-dates">
+                        📅 {r.availableDates.slice(0, 5).join(', ')}
+                      </div>
+                    </>
+                  ) : (r.reservationStatus || r.reservationOpenTime || r.reservationPeriod) ? (
+                    <>
+                      {r.reservationStatus && (
+                        <div className={`status ${r.reservationStatus.includes('마감') ? 'closed' : 'open'}`}>
+                          {r.reservationStatus}
+                        </div>
+                      )}
+                      {r.reservationOpenTime && (
+                        <div className="open-time">🕐 {r.reservationOpenTime}</div>
+                      )}
+                      {r.reservationPeriod && (
+                        <div className="period">📅 {r.reservationPeriod}</div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="status walkin">현장웨이팅</div>
                   )}
                 </div>
               </div>

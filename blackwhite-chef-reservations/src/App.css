@@ -241,10 +241,22 @@ header h1 {
   color: #2e7d32;
 }
 
+.status.walkin {
+  background: #fff3e0;
+  color: #e65100;
+}
+
 .open-time, .period {
   font-size: 13px;
   color: #666;
   margin-bottom: 4px;
+}
+
+.available-dates {
+  font-size: 13px;
+  color: #2e7d32;
+  margin-top: 6px;
+  font-weight: 500;
 }
 
 .reserve-btn {

@@ -95,8 +95,18 @@ async function scrapeRestaurants() {
 
               if (!item.name && line.length > 1 && line.length < 40) {
                 const skipPatterns = [
+                  // 기본 패턴
                   /^\d/, /^(예약|미쉐린|영업|점심|저녁|Taste|흑백|·|사진|신규)/,
-                  /만원/, /마감/, /오픈$/, /가능/, /포인트/, /자동결제/, /휴무/
+                  /만원/, /마감/, /오픈$/, /가능/, /포인트/, /자동결제/, /휴무/,
+                  // 방송/유튜브 관련
+                  /유튜브/, /Youtube/, /전지적/, /참견/, /수요미식회/, /생활의 달인/,
+                  /전현무/, /비밀이야/, /MBC|SBS|KBS/, /강민경/,
+                  // 셰프 별명/설명
+                  /동네의/, /꽃 주문/, /삐딱한/, /술 빚는/, /바베큐연구소장/,
+                  /부채도사/, /황금손/, /서울 엄마/, /천재/, /명인/, /달인/,
+                  // 태그
+                  /트래픽/, /급상승/, /입점/, /성공 보장/, /알림/,
+                  /브레이크/, /오늘\(/, /아직/
                 ];
                 if (!skipPatterns.some(p => p.test(line))) {
                   item.name = line;
@@ -161,6 +171,85 @@ async function scrapeRestaurants() {
     });
 
     console.log(`총 ${restaurants.length}개 매장 수집 완료`);
+
+    // 개별 매장 페이지에서 실제 예약 가능 날짜 가져오기
+    console.log('개별 매장 예약 가능 날짜 조회 중...');
+    const detailPage = await b.newPage();
+    await detailPage.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36');
+
+    for (let i = 0; i < restaurants.length; i++) {
+      const r = restaurants[i];
+      if (r.shopId) {
+        try {
+          const shopUrl = `https://app.catchtable.co.kr/ct/shop/${r.shopId}`;
+          await detailPage.goto(shopUrl, { waitUntil: 'networkidle2', timeout: 20000 });
+          await new Promise(resolve => setTimeout(resolve, 1500));
+
+          const availability = await detailPage.evaluate(() => {
+            const text = document.body.innerText;
+            const dates = [];
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+
+            // 예약 캘린더 영역 찾기 (날짜 · 인원 · 시간 이후)
+            let inCalendarSection = false;
+
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i];
+
+              // 캘린더 섹션 시작 감지
+              if (line.includes('날짜 · 인원 · 시간') || line.includes('날짜·인원·시간')) {
+                inCalendarSection = true;
+                continue;
+              }
+
+              // 리뷰 섹션 등 다른 섹션 시작하면 종료
+              if (inCalendarSection && (line.includes('리뷰') || line.includes('소개') || line.includes('위치'))) {
+                break;
+              }
+
+              if (!inCalendarSection) continue;
+
+              // "1.16 (금)" 형태의 날짜 패턴 (YY.MM.DD 형식 제외 - 2자리.1~2자리만)
+              const dateMatch = line.match(/^(\d{1,2}\.\d{1,2})\s*\([월화수목금토일]\)$/);
+              if (dateMatch) {
+                // 다음 줄 확인
+                const nextLine = lines[i + 1] || '';
+
+                // 다음 줄이 정확히 "예약 가능"일 때만 추가
+                if (nextLine === '예약 가능') {
+                  dates.push(dateMatch[1]);
+                }
+                // "휴무", "예약 마감" 등은 무시
+              }
+
+              if (dates.length >= 5) break;
+            }
+
+            // 현장 웨이팅 여부
+            const hasWalkIn = text.includes('현장') && text.includes('웨이팅');
+
+            return { dates, hasWalkIn };
+          });
+
+          r.availableDates = availability.dates;
+          if (availability.dates.length > 0) {
+            r.reservationStatus = `예약 가능 (${availability.dates.length}일)`;
+          } else if (availability.hasWalkIn) {
+            r.reservationStatus = null; // 프론트에서 현장웨이팅으로 표시
+          }
+
+          if ((i + 1) % 10 === 0) {
+            console.log(`${i + 1}/${restaurants.length} 매장 날짜 조회 완료`);
+          }
+        } catch (e) {
+          console.log(`${r.name} 날짜 조회 실패:`, e.message);
+        }
+      }
+    }
+
+    await detailPage.close();
+    console.log('예약 날짜 조회 완료');
+
     return restaurants;
 
   } finally {
