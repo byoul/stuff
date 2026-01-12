@@ -12,8 +12,10 @@ function App() {
   const [progress, setProgress] = useState({ message: '데이터 로딩 중...', current: 0, total: 0 })
   const eventSourceRef = useRef(null)
 
+  const [lastUpdated, setLastUpdated] = useState(null)
+
   useEffect(() => {
-    fetchRestaurants(true)
+    loadFromCache()
     return () => {
       if (eventSourceRef.current) {
         eventSourceRef.current.close()
@@ -21,12 +23,30 @@ function App() {
     }
   }, [])
 
-  const fetchRestaurants = (isInitial = false) => {
-    if (isInitial) {
-      setInitialLoading(true)
-    } else {
-      setRefreshing(true)
+  // 첫 로드: DB 캐시에서 빠르게 로드
+  const loadFromCache = async () => {
+    setInitialLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`${API_URL}/api/restaurants`)
+      const json = await res.json()
+      if (json.success && json.data) {
+        setRestaurants(json.data)
+        if (json.updatedAt) {
+          setLastUpdated(new Date(json.updatedAt))
+        }
+      } else if (json.error) {
+        setError(json.error)
+      }
+    } catch (e) {
+      setError('서버에 연결할 수 없습니다.')
     }
+    setInitialLoading(false)
+  }
+
+  // 새로고침: SSE로 실시간 스크래핑
+  const fetchRestaurants = () => {
+    setRefreshing(true)
     setError(null)
     setProgress({ message: '서버 연결 중...', current: 0, total: 0 })
 
@@ -46,35 +66,27 @@ function App() {
           current: data.current,
           total: data.total
         })
-      } else if (data.type === 'cached') {
-        setRestaurants(data.data)
-        setInitialLoading(false)
-        setRefreshing(false)
-        eventSource.close()
       } else if (data.type === 'complete') {
         setRestaurants(data.data)
-        setInitialLoading(false)
+        setLastUpdated(new Date())
         setRefreshing(false)
         eventSource.close()
       } else if (data.type === 'error') {
         setError(data.error)
-        setInitialLoading(false)
         setRefreshing(false)
         eventSource.close()
       }
     }
 
     eventSource.onerror = () => {
-      setError('서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.')
-      setInitialLoading(false)
+      setError('서버에 연결할 수 없습니다.')
       setRefreshing(false)
       eventSource.close()
     }
   }
 
-  const refresh = async () => {
-    await fetch(`${API_URL}/api/refresh`, { method: 'POST' })
-    fetchRestaurants(false)
+  const refresh = () => {
+    fetchRestaurants()
   }
 
   // 당장 예약 가능 여부 (예약 가능한 날짜가 있는 경우)
