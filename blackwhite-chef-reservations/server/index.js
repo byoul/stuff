@@ -26,6 +26,7 @@ let browser = null;
 let cachedData = null;
 let cacheTime = null;
 const CACHE_DURATION = 5 * 60 * 1000; // 5분
+const PARALLEL_COUNT = 5; // 동시 조회 수
 
 async function getBrowser() {
   if (!browser) {
@@ -37,7 +38,11 @@ async function getBrowser() {
   return browser;
 }
 
-async function scrapeRestaurants() {
+async function scrapeRestaurants(onProgress = null) {
+  const sendProgress = (stage, current, total, message) => {
+    if (onProgress) onProgress({ stage, current, total, message });
+  };
+
   const b = await getBrowser();
   const page = await b.newPage();
 
@@ -46,6 +51,7 @@ async function scrapeRestaurants() {
 
   try {
     console.log('캐치테이블 페이지 로딩...');
+    sendProgress('loading', 0, 0, '캐치테이블 페이지 로딩 중...');
     await page.goto(CATCHTABLE_URL, { waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise(r => setTimeout(r, 3000));
 
@@ -55,7 +61,7 @@ async function scrapeRestaurants() {
     let lastHeight = 0;
     let noChangeCount = 0;
 
-    while (scrollCount < maxScrolls && noChangeCount < 5) {
+    while (scrollCount < maxScrolls && noChangeCount < 3) {
       // 텍스트에서 매장 정보 수집
       const items = await page.evaluate(() => {
         const results = [];
@@ -161,6 +167,7 @@ async function scrapeRestaurants() {
       }
 
       scrollCount++;
+      sendProgress('collecting', restaurants.length, 0, `매장 수집 중... (${restaurants.length}개)`);
       if (scrollCount % 10 === 0) {
         console.log(`스크롤 ${scrollCount}회, 매장 ${restaurants.length}개 수집`);
       }
@@ -177,152 +184,172 @@ async function scrapeRestaurants() {
     });
 
     console.log(`총 ${restaurants.length}개 매장 수집 완료`);
+    sendProgress('collected', restaurants.length, restaurants.length, `${restaurants.length}개 매장 수집 완료`);
 
     // 개별 매장 페이지에서 실제 예약 가능 날짜 가져오기
     console.log('개별 매장 예약 가능 날짜 조회 중...');
-    const detailPage = await b.newPage();
-    await detailPage.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36');
 
-    for (let i = 0; i < restaurants.length; i++) {
-      const r = restaurants[i];
-      if (r.shopId) {
-        try {
-          const shopUrl = `https://app.catchtable.co.kr/ct/shop/${r.shopId}`;
-          await detailPage.goto(shopUrl, { waitUntil: 'networkidle2', timeout: 20000 });
-          await new Promise(resolve => setTimeout(resolve, 1500));
+    // shopId가 있는 매장만 필터링
+    const withShopId = restaurants.filter(r => r.shopId);
+    console.log(`${withShopId.length}개 매장 상세 조회 예정 (병렬 ${PARALLEL_COUNT}개)`);
+    sendProgress('detail', 0, withShopId.length, `상세 조회 시작... (0/${withShopId.length})`);
 
-          const availability = await detailPage.evaluate(() => {
-            const text = document.body.innerText;
-            const dates = [];
-            const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-
-            // 예약 오픈 일정 정보 수집
-            const openSchedule = [];
-            let inOpenScheduleSection = false;
-
-            // 예약 캘린더 영역 찾기 (날짜 · 인원 · 시간 이후)
-            let inCalendarSection = false;
-
-            for (let i = 0; i < lines.length; i++) {
-              const line = lines[i];
-
-              // 예약 오픈 일정 섹션 감지
-              if (line === '예약 오픈 일정') {
-                inOpenScheduleSection = true;
-                continue;
-              }
-
-              // 예약 오픈 일정 섹션 종료 조건
-              if (inOpenScheduleSection) {
-                if (line === '예약 오픈 알림 받기' || line.includes('소식') || line.includes('리뷰')) {
-                  inOpenScheduleSection = false;
-                } else if (line.match(/\d+월\s*\d+일/)) {
-                  // "2월 10일 오후 1:00" 또는 "3월 1일 ~ 31일 예약이 가능합니다" 형태
-                  openSchedule.push(line);
-                }
-              }
-
-              // 캘린더 섹션 시작 감지
-              if (line.includes('날짜 · 인원 · 시간') || line.includes('날짜·인원·시간')) {
-                inCalendarSection = true;
-                continue;
-              }
-
-              // 리뷰 섹션 등 다른 섹션 시작하면 종료
-              if (inCalendarSection && (line.includes('리뷰') || line.includes('소개') || line.includes('위치'))) {
-                break;
-              }
-
-              if (!inCalendarSection) continue;
-
-              // "1.16 (금)" 형태의 날짜 패턴 (YY.MM.DD 형식 제외 - 2자리.1~2자리만)
-              const dateMatch = line.match(/^(\d{1,2}\.\d{1,2})\s*\([월화수목금토일]\)$/);
-              if (dateMatch) {
-                // 다음 줄 확인
-                const nextLine = lines[i + 1] || '';
-
-                // 다음 줄이 정확히 "예약 가능"일 때만 추가
-                if (nextLine === '예약 가능') {
-                  dates.push(dateMatch[1]);
-                }
-                // "휴무", "예약 마감" 등은 무시
-              }
-
-              if (dates.length >= 5) break;
-            }
-
-            // 현장 웨이팅 여부
-            const hasWalkIn = text.includes('현장') && text.includes('웨이팅');
-
-            return { dates, hasWalkIn, openSchedule };
-          });
-
-          r.availableDates = availability.dates;
-
-          // 예약 오픈 일정 정보 저장
-          if (availability.openSchedule && availability.openSchedule.length > 0) {
-            const now = new Date();
-            const currentMonth = now.getMonth() + 1;
-            const currentDay = now.getDate();
-
-            // 미래 날짜인지 확인하는 함수
-            const isFutureDate = (dateStr) => {
-              const match = dateStr.match(/(\d+)월\s*(\d+)일/);
-              if (!match) return false;
-              const month = parseInt(match[1]);
-              const day = parseInt(match[2]);
-
-              // 현재 월 기준으로 판단
-              // 1~3월일 때 11~12월은 작년이므로 과거
-              if (currentMonth <= 3 && month >= 11) return false;
-              // 11~12월일 때 1~3월은 내년이므로 미래
-              if (currentMonth >= 11 && month <= 3) return true;
-
-              // 그 외는 단순 비교
-              if (month > currentMonth) return true;
-              if (month === currentMonth && day >= currentDay) return true;
-              return false;
-            };
-
-            // 예약 오픈 시간 (미래 날짜 중 오후/오전 시간이 포함된 항목)
-            const futureOpenTimes = availability.openSchedule.filter(s =>
-              (s.match(/\d+월\s*\d+일.*(오전|오후)\s*\d+:\d+/) ||
-               s.match(/\d+월\s*\d+일.*\d+시/)) &&
-              isFutureDate(s)
-            );
-            const openTimeItem = futureOpenTimes.length > 0 ? futureOpenTimes[0] : null;
-            if (openTimeItem && !r.reservationOpenTime) {
-              r.reservationOpenTime = openTimeItem + ' 예약 오픈';
-            }
-
-            // 예약 가능 기간 (미래 날짜 중 ~ 포함 또는 "예약이 가능합니다" 포함)
-            const futurePeriods = availability.openSchedule.filter(s =>
-              (s.includes('~') || s.includes('예약이 가능') || s.includes('예약 가능')) &&
-              isFutureDate(s)
-            );
-            const periodItem = futurePeriods.length > 0 ? futurePeriods[0] : null;
-            if (periodItem && !r.reservationPeriod) {
-              r.reservationPeriod = periodItem;
-            }
-          }
-
-          if (availability.dates.length > 0) {
-            r.reservationStatus = `예약 가능 (${availability.dates.length}일)`;
-          } else if (availability.hasWalkIn) {
-            r.reservationStatus = null; // 프론트에서 현장웨이팅으로 표시
-          }
-
-          if ((i + 1) % 10 === 0) {
-            console.log(`${i + 1}/${restaurants.length} 매장 날짜 조회 완료`);
-          }
-        } catch (e) {
-          console.log(`${r.name} 날짜 조회 실패:`, e.message);
-        }
-      }
+    // 페이지 풀 생성
+    const pages = [];
+    for (let i = 0; i < PARALLEL_COUNT; i++) {
+      const p = await b.newPage();
+      await p.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36');
+      pages.push(p);
     }
 
-    await detailPage.close();
+    // 단일 매장 조회 함수
+    const fetchShopDetail = async (page, r) => {
+      try {
+        const shopUrl = `https://app.catchtable.co.kr/ct/shop/${r.shopId}`;
+        await page.goto(shopUrl, { waitUntil: 'networkidle2', timeout: 20000 });
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        const availability = await page.evaluate(() => {
+          const text = document.body.innerText;
+          const dates = [];
+          const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+
+          // 예약 오픈 일정 정보 수집
+          const openSchedule = [];
+          let inOpenScheduleSection = false;
+
+          // 예약 캘린더 영역 찾기 (날짜 · 인원 · 시간 이후)
+          let inCalendarSection = false;
+
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+
+            // 예약 오픈 일정 섹션 감지
+            if (line === '예약 오픈 일정') {
+              inOpenScheduleSection = true;
+              continue;
+            }
+
+            // 예약 오픈 일정 섹션 종료 조건
+            if (inOpenScheduleSection) {
+              if (line === '예약 오픈 알림 받기' || line.includes('소식') || line.includes('리뷰')) {
+                inOpenScheduleSection = false;
+              } else if (line.match(/\d+월\s*\d+일/)) {
+                // "2월 10일 오후 1:00" 또는 "3월 1일 ~ 31일 예약이 가능합니다" 형태
+                openSchedule.push(line);
+              }
+            }
+
+            // 캘린더 섹션 시작 감지
+            if (line.includes('날짜 · 인원 · 시간') || line.includes('날짜·인원·시간')) {
+              inCalendarSection = true;
+              continue;
+            }
+
+            // 리뷰 섹션 등 다른 섹션 시작하면 종료
+            if (inCalendarSection && (line.includes('리뷰') || line.includes('소개') || line.includes('위치'))) {
+              break;
+            }
+
+            if (!inCalendarSection) continue;
+
+            // "1.16 (금)" 형태의 날짜 패턴 (YY.MM.DD 형식 제외 - 2자리.1~2자리만)
+            const dateMatch = line.match(/^(\d{1,2}\.\d{1,2})\s*\([월화수목금토일]\)$/);
+            if (dateMatch) {
+              // 다음 줄 확인
+              const nextLine = lines[i + 1] || '';
+
+              // 다음 줄이 정확히 "예약 가능"일 때만 추가
+              if (nextLine === '예약 가능') {
+                dates.push(dateMatch[1]);
+              }
+              // "휴무", "예약 마감" 등은 무시
+            }
+
+            if (dates.length >= 5) break;
+          }
+
+          // 현장 웨이팅 여부
+          const hasWalkIn = text.includes('현장') && text.includes('웨이팅');
+
+          return { dates, hasWalkIn, openSchedule };
+        });
+
+        r.availableDates = availability.dates;
+
+        // 예약 오픈 일정 정보 저장
+        if (availability.openSchedule && availability.openSchedule.length > 0) {
+          const now = new Date();
+          const currentMonth = now.getMonth() + 1;
+          const currentDay = now.getDate();
+
+          // 미래 날짜인지 확인하는 함수
+          const isFutureDate = (dateStr) => {
+            const match = dateStr.match(/(\d+)월\s*(\d+)일/);
+            if (!match) return false;
+            const month = parseInt(match[1]);
+            const day = parseInt(match[2]);
+
+            // 현재 월 기준으로 판단
+            // 1~3월일 때 11~12월은 작년이므로 과거
+            if (currentMonth <= 3 && month >= 11) return false;
+            // 11~12월일 때 1~3월은 내년이므로 미래
+            if (currentMonth >= 11 && month <= 3) return true;
+
+            // 그 외는 단순 비교
+            if (month > currentMonth) return true;
+            if (month === currentMonth && day >= currentDay) return true;
+            return false;
+          };
+
+          // 예약 오픈 시간 (미래 날짜 중 오후/오전 시간이 포함된 항목)
+          const futureOpenTimes = availability.openSchedule.filter(s =>
+            (s.match(/\d+월\s*\d+일.*(오전|오후)\s*\d+:\d+/) ||
+             s.match(/\d+월\s*\d+일.*\d+시/)) &&
+            isFutureDate(s)
+          );
+          const openTimeItem = futureOpenTimes.length > 0 ? futureOpenTimes[0] : null;
+          if (openTimeItem && !r.reservationOpenTime) {
+            r.reservationOpenTime = openTimeItem + ' 예약 오픈';
+          }
+
+          // 예약 가능 기간 (미래 날짜 중 ~ 포함 또는 "예약이 가능합니다" 포함)
+          const futurePeriods = availability.openSchedule.filter(s =>
+            (s.includes('~') || s.includes('예약이 가능') || s.includes('예약 가능')) &&
+            isFutureDate(s)
+          );
+          const periodItem = futurePeriods.length > 0 ? futurePeriods[0] : null;
+          if (periodItem && !r.reservationPeriod) {
+            r.reservationPeriod = periodItem;
+          }
+        }
+
+        if (availability.dates.length > 0) {
+          r.reservationStatus = `예약 가능 (${availability.dates.length}일)`;
+        } else if (availability.hasWalkIn) {
+          r.reservationStatus = null; // 프론트에서 현장웨이팅으로 표시
+        }
+      } catch (e) {
+        console.log(`${r.name} 날짜 조회 실패:`, e.message);
+      }
+    };
+
+    // 배치로 나누어 병렬 처리
+    for (let i = 0; i < withShopId.length; i += PARALLEL_COUNT) {
+      const batch = withShopId.slice(i, i + PARALLEL_COUNT);
+      const promises = batch.map((r, idx) => fetchShopDetail(pages[idx], r));
+      await Promise.all(promises);
+      const completed = Math.min(i + PARALLEL_COUNT, withShopId.length);
+      console.log(`${completed}/${withShopId.length} 매장 날짜 조회 완료`);
+      sendProgress('detail', completed, withShopId.length, `상세 조회 중... (${completed}/${withShopId.length})`);
+    }
+
+    // 페이지 풀 정리
+    for (const p of pages) {
+      await p.close();
+    }
     console.log('예약 날짜 조회 완료');
+    sendProgress('done', 0, 0, '완료');
 
     return restaurants;
 
@@ -347,6 +374,38 @@ app.get('/api/restaurants', async (req, res) => {
   } catch (error) {
     console.error('에러:', error.message);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// SSE 스트리밍 API
+app.get('/api/restaurants/stream', async (req, res) => {
+  // SSE 헤더 설정
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  // 캐시 확인
+  if (cachedData && cacheTime && (Date.now() - cacheTime < CACHE_DURATION)) {
+    res.write(`data: ${JSON.stringify({ type: 'cached', data: cachedData })}\n\n`);
+    res.end();
+    return;
+  }
+
+  try {
+    const data = await scrapeRestaurants((progress) => {
+      res.write(`data: ${JSON.stringify({ type: 'progress', ...progress })}\n\n`);
+    });
+
+    cachedData = data;
+    cacheTime = Date.now();
+
+    res.write(`data: ${JSON.stringify({ type: 'complete', data })}\n\n`);
+    res.end();
+  } catch (error) {
+    console.error('에러:', error.message);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
+    res.end();
   }
 });
 

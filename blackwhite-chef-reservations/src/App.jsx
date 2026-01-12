@@ -1,38 +1,80 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import './App.css'
 
 const API_URL = 'http://localhost:3001'
 
 function App() {
   const [restaurants, setRestaurants] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
   const [filter, setFilter] = useState('all')
+  const [progress, setProgress] = useState({ message: '데이터 로딩 중...', current: 0, total: 0 })
+  const eventSourceRef = useRef(null)
 
   useEffect(() => {
-    fetchRestaurants()
+    fetchRestaurants(true)
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close()
+      }
+    }
   }, [])
 
-  const fetchRestaurants = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetch(`${API_URL}/api/restaurants`)
-      const json = await res.json()
-      if (json.success) {
-        setRestaurants(json.data)
-      } else {
-        setError(json.error)
-      }
-    } catch (e) {
-      setError('서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.')
+  const fetchRestaurants = (isInitial = false) => {
+    if (isInitial) {
+      setInitialLoading(true)
+    } else {
+      setRefreshing(true)
     }
-    setLoading(false)
+    setError(null)
+    setProgress({ message: '서버 연결 중...', current: 0, total: 0 })
+
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close()
+    }
+
+    const eventSource = new EventSource(`${API_URL}/api/restaurants/stream`)
+    eventSourceRef.current = eventSource
+
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+
+      if (data.type === 'progress') {
+        setProgress({
+          message: data.message,
+          current: data.current,
+          total: data.total
+        })
+      } else if (data.type === 'cached') {
+        setRestaurants(data.data)
+        setInitialLoading(false)
+        setRefreshing(false)
+        eventSource.close()
+      } else if (data.type === 'complete') {
+        setRestaurants(data.data)
+        setInitialLoading(false)
+        setRefreshing(false)
+        eventSource.close()
+      } else if (data.type === 'error') {
+        setError(data.error)
+        setInitialLoading(false)
+        setRefreshing(false)
+        eventSource.close()
+      }
+    }
+
+    eventSource.onerror = () => {
+      setError('서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.')
+      setInitialLoading(false)
+      setRefreshing(false)
+      eventSource.close()
+    }
   }
 
   const refresh = async () => {
     await fetch(`${API_URL}/api/refresh`, { method: 'POST' })
-    fetchRestaurants()
+    fetchRestaurants(false)
   }
 
   // 당장 예약 가능 여부 (예약 가능한 날짜가 있는 경우)
@@ -74,6 +116,14 @@ function App() {
 
   return (
     <div className="container">
+      {/* 우측 상단 로딩 인디케이터 */}
+      {refreshing && (
+        <div className="refresh-indicator">
+          <div className="refresh-spinner"></div>
+          <span>{progress.message}</span>
+        </div>
+      )}
+
       <header>
         <h1>흑백요리사 시즌2 예약 정보</h1>
         <p className="subtitle">캐치테이블 예약 정보만 모아서 보기</p>
@@ -106,17 +156,25 @@ function App() {
             현장 웨이팅 <span className="count">{walkInCount}</span>
           </button>
         </div>
-        <button className="refresh-btn" onClick={refresh} disabled={loading}>
-          {loading ? '로딩 중...' : '새로고침'}
+        <button className="refresh-btn" onClick={refresh} disabled={refreshing}>
+          {refreshing ? '새로고침 중...' : '새로고침'}
         </button>
       </div>
 
       {error && <div className="error">{error}</div>}
 
-      {loading ? (
+      {initialLoading ? (
         <div className="loading">
           <div className="spinner"></div>
-          <p>캐치테이블에서 데이터를 가져오는 중...</p>
+          <p className="loading-message">{progress.message}</p>
+          {progress.total > 0 && (
+            <div className="progress-bar-container">
+              <div
+                className="progress-bar"
+                style={{ width: `${(progress.current / progress.total) * 100}%` }}
+              />
+            </div>
+          )}
           <p className="loading-sub">첫 로딩은 1-2분 정도 걸릴 수 있습니다</p>
         </div>
       ) : (
