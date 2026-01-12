@@ -82,37 +82,48 @@ function App() {
     return r.availableDates?.length > 0
   }
 
-  // 예약 오픈 예정 여부 (오픈 시간이나 기간 정보가 있는 경우)
+  // 예약 오픈 예정 여부 (오픈 시간이나 기간 정보가 있는 경우 - 마감이어도 오픈 정보 있으면 여기)
   const isUpcoming = (r) => {
     return !r.availableDates?.length &&
            (r.reservationOpenTime || r.reservationPeriod)
   }
 
-  // 현장 웨이팅 여부 판단
+  // 예약 마감 여부 (마감이고 오픈 예정 정보가 없는 경우)
+  const isClosed = (r) => {
+    return r.reservationStatus?.includes('마감') &&
+           !r.reservationOpenTime &&
+           !r.reservationPeriod
+  }
+
+  // 현장 웨이팅 여부 (링크 있고, 예약 정보 없음)
   const isWalkIn = (r) => {
-    return !r.availableDates?.length &&
+    return r.shopUrl &&
+           !r.availableDates?.length &&
            !r.reservationStatus &&
            !r.reservationOpenTime &&
            !r.reservationPeriod
   }
 
+  // 정보 없음 (링크 없음 = 매핑 안 된 매장)
+  const isNoInfo = (r) => {
+    return !r.shopUrl
+  }
+
   const filtered = restaurants.filter(r => {
-    if (filter === 'available') {
-      return isAvailableNow(r)
-    }
-    if (filter === 'upcoming') {
-      return isUpcoming(r)
-    }
-    if (filter === 'walkin') {
-      return isWalkIn(r)
-    }
+    if (filter === 'available') return isAvailableNow(r)
+    if (filter === 'upcoming') return isUpcoming(r)
+    if (filter === 'closed') return isClosed(r)
+    if (filter === 'walkin') return isWalkIn(r)
+    if (filter === 'noinfo') return isNoInfo(r)
     return true
   })
 
   // 각 탭의 개수 계산
   const availableNowCount = restaurants.filter(r => isAvailableNow(r)).length
   const upcomingCount = restaurants.filter(r => isUpcoming(r)).length
+  const closedCount = restaurants.filter(r => isClosed(r)).length
   const walkInCount = restaurants.filter(r => isWalkIn(r)).length
+  const noInfoCount = restaurants.filter(r => isNoInfo(r)).length
 
   return (
     <div className="container">
@@ -150,10 +161,22 @@ function App() {
             오픈 예정 <span className="count">{upcomingCount}</span>
           </button>
           <button
+            className={filter === 'closed' ? 'active' : ''}
+            onClick={() => setFilter('closed')}
+          >
+            예약 마감 <span className="count">{closedCount}</span>
+          </button>
+          <button
             className={filter === 'walkin' ? 'active' : ''}
             onClick={() => setFilter('walkin')}
           >
             현장 웨이팅 <span className="count">{walkInCount}</span>
+          </button>
+          <button
+            className={filter === 'noinfo' ? 'active' : ''}
+            onClick={() => setFilter('noinfo')}
+          >
+            정보 없음 <span className="count">{noInfoCount}</span>
           </button>
         </div>
         <button className="refresh-btn" onClick={refresh} disabled={refreshing}>
@@ -224,8 +247,10 @@ function App() {
                         <div className="period">📅 {r.reservationPeriod}</div>
                       )}
                     </>
-                  ) : (
+                  ) : r.shopUrl ? (
                     <div className="status walkin">현장웨이팅</div>
+                  ) : (
+                    <div className="status noinfo">정보 없음</div>
                   )}
                 </div>
               </div>
