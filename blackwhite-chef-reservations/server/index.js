@@ -1,19 +1,77 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
+const { Pool } = require('pg');
 
 console.log('서버 시작 중...');
 console.log('Node version:', process.version);
 console.log('PORT:', process.env.PORT);
 console.log('PUPPETEER_EXECUTABLE_PATH:', process.env.PUPPETEER_EXECUTABLE_PATH);
+console.log('DATABASE_URL:', process.env.DATABASE_URL ? '설정됨' : '없음');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+// PostgreSQL 연결
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+// DB 초기화
+async function initDB() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS restaurant_cache (
+        id SERIAL PRIMARY KEY,
+        data JSONB NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('DB 테이블 준비 완료');
+  } catch (e) {
+    console.error('DB 초기화 실패:', e.message);
+  }
+}
+
+// DB에서 캐시 데이터 로드
+async function loadFromDB() {
+  try {
+    const result = await pool.query(
+      'SELECT data, updated_at FROM restaurant_cache ORDER BY updated_at DESC LIMIT 1'
+    );
+    if (result.rows.length > 0) {
+      console.log('DB에서 캐시 데이터 로드됨:', result.rows[0].updated_at);
+      return {
+        data: result.rows[0].data,
+        updatedAt: result.rows[0].updated_at
+      };
+    }
+  } catch (e) {
+    console.error('DB 로드 실패:', e.message);
+  }
+  return null;
+}
+
+// DB에 데이터 저장
+async function saveToDB(data) {
+  try {
+    await pool.query(
+      'INSERT INTO restaurant_cache (data) VALUES ($1)',
+      [JSON.stringify(data)]
+    );
+    console.log('DB에 데이터 저장 완료');
+  } catch (e) {
+    console.error('DB 저장 실패:', e.message);
+  }
+}
 
 const CATCHTABLE_URL = 'https://app.catchtable.co.kr/ct/curation/culinaryclasswars2';
 
@@ -30,7 +88,7 @@ try {
 let browser = null;
 let cachedData = null;
 let cacheTime = null;
-const CACHE_DURATION = 5 * 60 * 1000; // 5분
+const CACHE_DURATION = 5 * 60 * 1000; // 5분 (메모리 캐시용)
 const PARALLEL_COUNT = 5; // 동시 조회 수
 
 async function getBrowser() {
@@ -393,39 +451,42 @@ async function scrapeRestaurants(onProgress = null) {
   }
 }
 
-// 매장 목록 API
+// 매장 목록 API - DB에서 먼저 로드
 app.get('/api/restaurants', async (req, res) => {
   try {
-    // 캐시 확인
+    // 메모리 캐시 확인
     if (cachedData && cacheTime && (Date.now() - cacheTime < CACHE_DURATION)) {
-      return res.json({ success: true, data: cachedData, cached: true });
+      return res.json({ success: true, data: cachedData, cached: true, updatedAt: new Date(cacheTime).toISOString() });
     }
 
+    // DB에서 로드
+    const dbCache = await loadFromDB();
+    if (dbCache) {
+      cachedData = dbCache.data;
+      cacheTime = new Date(dbCache.updatedAt).getTime();
+      return res.json({ success: true, data: dbCache.data, cached: true, updatedAt: dbCache.updatedAt });
+    }
+
+    // DB에도 없으면 스크래핑
     const data = await scrapeRestaurants();
     cachedData = data;
     cacheTime = Date.now();
+    await saveToDB(data);
 
-    res.json({ success: true, data, cached: false });
+    res.json({ success: true, data, cached: false, updatedAt: new Date().toISOString() });
   } catch (error) {
     console.error('에러:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// SSE 스트리밍 API
+// SSE 스트리밍 API - 새로고침용 (항상 새로 스크래핑)
 app.get('/api/restaurants/stream', async (req, res) => {
   // SSE 헤더 설정
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
-
-  // 캐시 확인
-  if (cachedData && cacheTime && (Date.now() - cacheTime < CACHE_DURATION)) {
-    res.write(`data: ${JSON.stringify({ type: 'cached', data: cachedData })}\n\n`);
-    res.end();
-    return;
-  }
 
   try {
     const data = await scrapeRestaurants((progress) => {
@@ -434,6 +495,7 @@ app.get('/api/restaurants/stream', async (req, res) => {
 
     cachedData = data;
     cacheTime = Date.now();
+    await saveToDB(data);
 
     res.write(`data: ${JSON.stringify({ type: 'complete', data })}\n\n`);
     res.end();
@@ -444,11 +506,11 @@ app.get('/api/restaurants/stream', async (req, res) => {
   }
 });
 
-// 캐시 초기화
+// 수동 새로고침 트리거
 app.post('/api/refresh', async (req, res) => {
   cachedData = null;
   cacheTime = null;
-  res.json({ success: true, message: '캐시 초기화 완료' });
+  res.json({ success: true, message: '캐시 초기화 완료. 다음 요청 시 새로 수집합니다.' });
 });
 
 // 헬스 체크
@@ -456,11 +518,27 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`서버 실행: http://0.0.0.0:${PORT}`);
-});
+// 서버 시작
+async function startServer() {
+  await initDB();
+
+  // 시작 시 DB에서 캐시 로드
+  const dbCache = await loadFromDB();
+  if (dbCache) {
+    cachedData = dbCache.data;
+    cacheTime = new Date(dbCache.updatedAt).getTime();
+    console.log('시작 시 DB 캐시 로드 완료');
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`서버 실행: http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer();
 
 process.on('SIGINT', async () => {
   if (browser) await browser.close();
+  await pool.end();
   process.exit(0);
 });
