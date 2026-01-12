@@ -88,8 +88,14 @@ async function scrapeRestaurants() {
               }
               if (line.includes('빕구르망')) item.michelinBib = true;
               if (line.includes('주간 예약이 마감')) item.reservationStatus = line;
-              if (line.includes('예약 오픈')) item.reservationOpenTime = line;
-              if (line.includes('예약 가능합니다')) item.reservationPeriod = line;
+              // "2월 10일 오후 1:00 예약 오픈" 형태 매칭
+              if (line.includes('예약 오픈') && line.match(/\d+월\s*\d+일/)) {
+                item.reservationOpenTime = line;
+              }
+              // "3월 1일 ~ 31일 예약 가능합니다" 형태 매칭
+              if (line.includes('예약') && line.includes('가능') && line.match(/\d+월\s*\d+일/)) {
+                item.reservationPeriod = line;
+              }
               if (line.match(/(점심|저녁|동일가).*만원/)) item.priceInfo = line;
               if (line.match(/영업중|영업 전|영업 종료/) && line.includes('•')) item.hours = line;
 
@@ -190,11 +196,31 @@ async function scrapeRestaurants() {
             const dates = [];
             const lines = text.split('\n').map(l => l.trim()).filter(l => l);
 
+            // 예약 오픈 일정 정보 수집
+            const openSchedule = [];
+            let inOpenScheduleSection = false;
+
             // 예약 캘린더 영역 찾기 (날짜 · 인원 · 시간 이후)
             let inCalendarSection = false;
 
             for (let i = 0; i < lines.length; i++) {
               const line = lines[i];
+
+              // 예약 오픈 일정 섹션 감지
+              if (line === '예약 오픈 일정') {
+                inOpenScheduleSection = true;
+                continue;
+              }
+
+              // 예약 오픈 일정 섹션 종료 조건
+              if (inOpenScheduleSection) {
+                if (line === '예약 오픈 알림 받기' || line.includes('소식') || line.includes('리뷰')) {
+                  inOpenScheduleSection = false;
+                } else if (line.match(/\d+월\s*\d+일/)) {
+                  // "2월 10일 오후 1:00" 또는 "3월 1일 ~ 31일 예약이 가능합니다" 형태
+                  openSchedule.push(line);
+                }
+              }
 
               // 캘린더 섹션 시작 감지
               if (line.includes('날짜 · 인원 · 시간') || line.includes('날짜·인원·시간')) {
@@ -228,10 +254,58 @@ async function scrapeRestaurants() {
             // 현장 웨이팅 여부
             const hasWalkIn = text.includes('현장') && text.includes('웨이팅');
 
-            return { dates, hasWalkIn };
+            return { dates, hasWalkIn, openSchedule };
           });
 
           r.availableDates = availability.dates;
+
+          // 예약 오픈 일정 정보 저장
+          if (availability.openSchedule && availability.openSchedule.length > 0) {
+            const now = new Date();
+            const currentMonth = now.getMonth() + 1;
+            const currentDay = now.getDate();
+
+            // 미래 날짜인지 확인하는 함수
+            const isFutureDate = (dateStr) => {
+              const match = dateStr.match(/(\d+)월\s*(\d+)일/);
+              if (!match) return false;
+              const month = parseInt(match[1]);
+              const day = parseInt(match[2]);
+
+              // 현재 월 기준으로 판단
+              // 1~3월일 때 11~12월은 작년이므로 과거
+              if (currentMonth <= 3 && month >= 11) return false;
+              // 11~12월일 때 1~3월은 내년이므로 미래
+              if (currentMonth >= 11 && month <= 3) return true;
+
+              // 그 외는 단순 비교
+              if (month > currentMonth) return true;
+              if (month === currentMonth && day >= currentDay) return true;
+              return false;
+            };
+
+            // 예약 오픈 시간 (미래 날짜 중 오후/오전 시간이 포함된 항목)
+            const futureOpenTimes = availability.openSchedule.filter(s =>
+              (s.match(/\d+월\s*\d+일.*(오전|오후)\s*\d+:\d+/) ||
+               s.match(/\d+월\s*\d+일.*\d+시/)) &&
+              isFutureDate(s)
+            );
+            const openTimeItem = futureOpenTimes.length > 0 ? futureOpenTimes[0] : null;
+            if (openTimeItem && !r.reservationOpenTime) {
+              r.reservationOpenTime = openTimeItem + ' 예약 오픈';
+            }
+
+            // 예약 가능 기간 (미래 날짜 중 ~ 포함 또는 "예약이 가능합니다" 포함)
+            const futurePeriods = availability.openSchedule.filter(s =>
+              (s.includes('~') || s.includes('예약이 가능') || s.includes('예약 가능')) &&
+              isFutureDate(s)
+            );
+            const periodItem = futurePeriods.length > 0 ? futurePeriods[0] : null;
+            if (periodItem && !r.reservationPeriod) {
+              r.reservationPeriod = periodItem;
+            }
+          }
+
           if (availability.dates.length > 0) {
             r.reservationStatus = `예약 가능 (${availability.dates.length}일)`;
           } else if (availability.hasWalkIn) {
