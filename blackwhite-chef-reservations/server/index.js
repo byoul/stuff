@@ -4,8 +4,12 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 
+console.log('서버 시작 중...');
+console.log('Node version:', process.version);
+console.log('PUPPETEER_EXECUTABLE_PATH:', process.env.PUPPETEER_EXECUTABLE_PATH);
+
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
@@ -30,10 +34,17 @@ const PARALLEL_COUNT = 5; // 동시 조회 수
 
 async function getBrowser() {
   if (!browser) {
-    browser = await puppeteer.launch({
+    const launchOptions = {
       headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    };
+
+    // 환경 변수로 Chromium 경로가 지정된 경우 사용
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+      launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
+
+    browser = await puppeteer.launch(launchOptions);
   }
   return browser;
 }
