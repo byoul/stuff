@@ -19,7 +19,7 @@ RUN npm ci
 
 COPY server/ .
 
-ENV PORT=3001
+# Railway가 PORT 환경변수를 자동 설정함
 EXPOSE 3001
 
 CMD ["node", "index.js"]

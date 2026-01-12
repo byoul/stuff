@@ -6,6 +6,7 @@ const path = require('path');
 
 console.log('서버 시작 중...');
 console.log('Node version:', process.version);
+console.log('PORT:', process.env.PORT);
 console.log('PUPPETEER_EXECUTABLE_PATH:', process.env.PUPPETEER_EXECUTABLE_PATH);
 
 const app = express();
@@ -36,7 +37,8 @@ async function getBrowser() {
   if (!browser) {
     const launchOptions = {
       headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+      protocolTimeout: 120000 // 2분 타임아웃
     };
 
     // 환경 변수로 Chromium 경로가 지정된 경우 사용
@@ -454,8 +456,8 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-app.listen(PORT, () => {
-  console.log(`서버 실행: http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`서버 실행: http://0.0.0.0:${PORT}`);
 });
 
 process.on('SIGINT', async () => {
