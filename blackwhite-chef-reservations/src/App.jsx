@@ -104,9 +104,13 @@ function App() {
            !r.reservationPeriod
   }
 
-  // 정보 없음 (링크 없음 = 매핑 안 된 매장)
+  // 정보 없음 (링크 없음 + 예약 관련 정보도 없음)
   const isNoInfo = (r) => {
-    return !r.shopUrl
+    return !r.shopUrl &&
+           !r.availableDates?.length &&
+           !r.reservationStatus &&
+           !r.reservationOpenTime &&
+           !r.reservationPeriod
   }
 
   const filtered = restaurants.filter(r => {
