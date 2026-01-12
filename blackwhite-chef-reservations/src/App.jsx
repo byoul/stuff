@@ -35,6 +35,17 @@ function App() {
     fetchRestaurants()
   }
 
+  // 당장 예약 가능 여부 (예약 가능한 날짜가 있는 경우)
+  const isAvailableNow = (r) => {
+    return r.availableDates?.length > 0
+  }
+
+  // 예약 오픈 예정 여부 (오픈 시간이나 기간 정보가 있는 경우)
+  const isUpcoming = (r) => {
+    return !r.availableDates?.length &&
+           (r.reservationOpenTime || r.reservationPeriod)
+  }
+
   // 현장 웨이팅 여부 판단
   const isWalkIn = (r) => {
     return !r.availableDates?.length &&
@@ -43,17 +54,12 @@ function App() {
            !r.reservationPeriod
   }
 
-  // 예약 가능 여부 판단
-  const isReservable = (r) => {
-    return r.availableDates?.length > 0 ||
-           (r.reservationStatus && !r.reservationStatus.includes('마감')) ||
-           r.reservationOpenTime ||
-           r.reservationPeriod
-  }
-
   const filtered = restaurants.filter(r => {
     if (filter === 'available') {
-      return isReservable(r)
+      return isAvailableNow(r)
+    }
+    if (filter === 'upcoming') {
+      return isUpcoming(r)
     }
     if (filter === 'walkin') {
       return isWalkIn(r)
@@ -62,7 +68,8 @@ function App() {
   })
 
   // 각 탭의 개수 계산
-  const availableCount = restaurants.filter(r => isReservable(r)).length
+  const availableNowCount = restaurants.filter(r => isAvailableNow(r)).length
+  const upcomingCount = restaurants.filter(r => isUpcoming(r)).length
   const walkInCount = restaurants.filter(r => isWalkIn(r)).length
 
   return (
@@ -84,7 +91,13 @@ function App() {
             className={filter === 'available' ? 'active' : ''}
             onClick={() => setFilter('available')}
           >
-            예약 가능 <span className="count">{availableCount}</span>
+            예약 가능 <span className="count">{availableNowCount}</span>
+          </button>
+          <button
+            className={filter === 'upcoming' ? 'active' : ''}
+            onClick={() => setFilter('upcoming')}
+          >
+            오픈 예정 <span className="count">{upcomingCount}</span>
           </button>
           <button
             className={filter === 'walkin' ? 'active' : ''}
