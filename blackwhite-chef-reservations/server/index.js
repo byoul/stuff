@@ -173,13 +173,11 @@ async function scrapeRestaurants(onProgress = null) {
       }
     }
 
-    // 매핑 적용
+    // 매핑 적용 (매핑된 매장만 링크 연결)
     restaurants.forEach(r => {
       if (r.name && shopMapping[r.name]) {
         r.shopId = shopMapping[r.name];
         r.shopUrl = `https://app.catchtable.co.kr/ct/shop/${shopMapping[r.name]}`;
-      } else if (r.name) {
-        r.shopUrl = `https://app.catchtable.co.kr/ct/search?keyword=${encodeURIComponent(r.name)}`;
       }
     });
 
@@ -208,6 +206,24 @@ async function scrapeRestaurants(onProgress = null) {
         const shopUrl = `https://app.catchtable.co.kr/ct/shop/${r.shopId}`;
         await page.goto(shopUrl, { waitUntil: 'networkidle2', timeout: 20000 });
         await new Promise(resolve => setTimeout(resolve, 1500));
+
+        // 예약 탭이 있으면 클릭 (웨이팅/예약 탭이 분리된 매장)
+        await page.evaluate(() => {
+          const elements = document.querySelectorAll('span, div, button');
+          for (const el of elements) {
+            // 정확히 '예약' 텍스트이고, 탭처럼 생긴 요소
+            if (el.innerText === '예약' && el.children.length === 0) {
+              const rect = el.getBoundingClientRect();
+              // 탭 버튼 크기 범위 (너무 크거나 작지 않은 것)
+              if (rect.width > 20 && rect.width < 200 && rect.height > 20 && rect.height < 60) {
+                el.click();
+                return true;
+              }
+            }
+          }
+          return false;
+        });
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         const availability = await page.evaluate(() => {
           const text = document.body.innerText;
@@ -272,7 +288,10 @@ async function scrapeRestaurants(onProgress = null) {
           // 현장 웨이팅 여부
           const hasWalkIn = text.includes('현장') && text.includes('웨이팅');
 
-          return { dates, hasWalkIn, openSchedule };
+          // 캘린더 존재 여부 (날짜·인원·시간 섹션이 있었는지)
+          const hasCalendar = inCalendarSection || dates.length > 0;
+
+          return { dates, hasWalkIn, openSchedule, hasCalendar };
         });
 
         r.availableDates = availability.dates;
@@ -328,6 +347,9 @@ async function scrapeRestaurants(onProgress = null) {
           r.reservationStatus = `예약 가능 (${availability.dates.length}일)`;
         } else if (availability.hasWalkIn) {
           r.reservationStatus = null; // 프론트에서 현장웨이팅으로 표시
+        } else if (availability.hasCalendar) {
+          // 캘린더는 있지만 예약 가능 날짜가 없으면 마감
+          r.reservationStatus = '예약 마감';
         }
       } catch (e) {
         console.log(`${r.name} 날짜 조회 실패:`, e.message);
