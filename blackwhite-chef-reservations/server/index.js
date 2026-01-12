@@ -480,7 +480,7 @@ app.get('/api/restaurants', async (req, res) => {
   }
 });
 
-// SSE 스트리밍 API - 새로고침용 (항상 새로 스크래핑)
+// SSE 스트리밍 API - 전체 새로고침용 (항상 새로 스크래핑)
 app.get('/api/restaurants/stream', async (req, res) => {
   // SSE 헤더 설정
   res.setHeader('Content-Type', 'text/event-stream');
@@ -506,6 +506,165 @@ app.get('/api/restaurants/stream', async (req, res) => {
   }
 });
 
+// 빠른 새로고침 - 예약 관련 식당만 상세 조회
+app.get('/api/restaurants/quick-refresh', async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  try {
+    // 캐시된 데이터가 없으면 에러
+    if (!cachedData || cachedData.length === 0) {
+      res.write(`data: ${JSON.stringify({ type: 'error', error: '캐시 데이터 없음. 전체 새로고침이 필요합니다.' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // 예약 관련 식당만 필터링 (shopId가 있고, 현장웨이팅/정보없음이 아닌 것)
+    const needsUpdate = cachedData.filter(r => {
+      if (!r.shopId) return false;
+      // 예약 가능, 오픈 예정, 예약 마감인 식당만
+      const hasReservationInfo = r.availableDates?.length > 0 ||
+                                  r.reservationStatus ||
+                                  r.reservationOpenTime ||
+                                  r.reservationPeriod;
+      return hasReservationInfo;
+    });
+
+    res.write(`data: ${JSON.stringify({ type: 'progress', stage: 'quick', current: 0, total: needsUpdate.length, message: `${needsUpdate.length}개 매장 빠른 조회 시작...` })}\n\n`);
+
+    const b = await getBrowser();
+
+    // 페이지 풀 생성
+    const pages = [];
+    for (let i = 0; i < PARALLEL_COUNT; i++) {
+      const p = await b.newPage();
+      await p.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36');
+      pages.push(p);
+    }
+
+    // 상세 조회 함수 (기존 fetchShopDetail과 동일한 로직)
+    const updateShopDetail = async (page, r) => {
+      try {
+        const shopUrl = `https://app.catchtable.co.kr/ct/shop/${r.shopId}`;
+        await page.goto(shopUrl, { waitUntil: 'networkidle2', timeout: 20000 });
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        await page.evaluate(() => {
+          const elements = document.querySelectorAll('span, div, button');
+          for (const el of elements) {
+            if (el.innerText === '예약' && el.children.length === 0) {
+              const rect = el.getBoundingClientRect();
+              if (rect.width > 20 && rect.width < 200 && rect.height > 20 && rect.height < 60) {
+                el.click();
+                return true;
+              }
+            }
+          }
+          return false;
+        });
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        const availability = await page.evaluate(() => {
+          const text = document.body.innerText;
+          const dates = [];
+          const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+          const openSchedule = [];
+          let inOpenScheduleSection = false;
+          let inCalendarSection = false;
+
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (line === '예약 오픈 일정') { inOpenScheduleSection = true; continue; }
+            if (inOpenScheduleSection) {
+              if (line === '예약 오픈 알림 받기' || line.includes('소식') || line.includes('리뷰')) {
+                inOpenScheduleSection = false;
+              } else if (line.match(/\d+월\s*\d+일/)) {
+                openSchedule.push(line);
+              }
+            }
+            if (line.includes('날짜 · 인원 · 시간') || line.includes('날짜·인원·시간')) {
+              inCalendarSection = true; continue;
+            }
+            if (inCalendarSection && (line.includes('리뷰') || line.includes('소개') || line.includes('위치'))) break;
+            if (!inCalendarSection) continue;
+            const dateMatch = line.match(/^(\d{1,2}\.\d{1,2})\s*\([월화수목금토일]\)$/);
+            if (dateMatch) {
+              const nextLine = lines[i + 1] || '';
+              if (nextLine === '예약 가능') dates.push(dateMatch[1]);
+            }
+            if (dates.length >= 5) break;
+          }
+          const hasWalkIn = text.includes('현장') && text.includes('웨이팅');
+          const hasCalendar = inCalendarSection || dates.length > 0;
+          return { dates, hasWalkIn, openSchedule, hasCalendar };
+        });
+
+        r.availableDates = availability.dates;
+
+        if (availability.openSchedule && availability.openSchedule.length > 0) {
+          const now = new Date();
+          const currentMonth = now.getMonth() + 1;
+          const currentDay = now.getDate();
+          const isFutureDate = (dateStr) => {
+            const match = dateStr.match(/(\d+)월\s*(\d+)일/);
+            if (!match) return false;
+            const month = parseInt(match[1]);
+            const day = parseInt(match[2]);
+            if (currentMonth <= 3 && month >= 11) return false;
+            if (currentMonth >= 11 && month <= 3) return true;
+            if (month > currentMonth) return true;
+            if (month === currentMonth && day >= currentDay) return true;
+            return false;
+          };
+          const futureOpenTimes = availability.openSchedule.filter(s =>
+            (s.match(/\d+월\s*\d+일.*(오전|오후)\s*\d+:\d+/) || s.match(/\d+월\s*\d+일.*\d+시/)) && isFutureDate(s)
+          );
+          if (futureOpenTimes.length > 0) r.reservationOpenTime = futureOpenTimes[0] + ' 예약 오픈';
+          const futurePeriods = availability.openSchedule.filter(s =>
+            (s.includes('~') || s.includes('예약이 가능') || s.includes('예약 가능')) && isFutureDate(s)
+          );
+          if (futurePeriods.length > 0) r.reservationPeriod = futurePeriods[0];
+        }
+
+        if (availability.dates.length > 0) {
+          r.reservationStatus = `예약 가능 (${availability.dates.length}일)`;
+        } else if (availability.hasWalkIn) {
+          r.reservationStatus = null;
+        } else if (availability.hasCalendar) {
+          r.reservationStatus = '예약 마감';
+        }
+      } catch (e) {
+        console.log(`${r.name} 빠른 조회 실패:`, e.message);
+      }
+    };
+
+    // 배치로 병렬 처리
+    for (let i = 0; i < needsUpdate.length; i += PARALLEL_COUNT) {
+      const batch = needsUpdate.slice(i, i + PARALLEL_COUNT);
+      await Promise.all(batch.map((r, idx) => updateShopDetail(pages[idx], r)));
+      const completed = Math.min(i + PARALLEL_COUNT, needsUpdate.length);
+      res.write(`data: ${JSON.stringify({ type: 'progress', stage: 'quick', current: completed, total: needsUpdate.length, message: `빠른 조회 중... (${completed}/${needsUpdate.length})` })}\n\n`);
+    }
+
+    // 페이지 풀 정리
+    for (const p of pages) {
+      await p.close();
+    }
+
+    cacheTime = Date.now();
+    await saveToDB(cachedData);
+
+    res.write(`data: ${JSON.stringify({ type: 'complete', data: cachedData })}\n\n`);
+    res.end();
+  } catch (error) {
+    console.error('빠른 새로고침 에러:', error.message);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
+    res.end();
+  }
+});
+
 // 수동 새로고침 트리거
 app.post('/api/refresh', async (req, res) => {
   cachedData = null;
@@ -517,6 +676,32 @@ app.post('/api/refresh', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
+
+// 백그라운드 자동 새로고침 (6시간마다)
+const AUTO_REFRESH_INTERVAL = 6 * 60 * 60 * 1000; // 6시간
+let isRefreshing = false;
+
+async function backgroundRefresh() {
+  if (isRefreshing) {
+    console.log('이미 새로고침 진행 중, 스킵');
+    return;
+  }
+
+  console.log('백그라운드 자동 새로고침 시작...');
+  isRefreshing = true;
+
+  try {
+    const data = await scrapeRestaurants();
+    cachedData = data;
+    cacheTime = Date.now();
+    await saveToDB(data);
+    console.log('백그라운드 새로고침 완료:', new Date().toISOString());
+  } catch (e) {
+    console.error('백그라운드 새로고침 실패:', e.message);
+  } finally {
+    isRefreshing = false;
+  }
+}
 
 // 서버 시작
 async function startServer() {
@@ -533,6 +718,16 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`서버 실행: http://0.0.0.0:${PORT}`);
   });
+
+  // 6시간마다 자동 새로고침
+  setInterval(backgroundRefresh, AUTO_REFRESH_INTERVAL);
+  console.log('자동 새로고침 설정: 6시간마다');
+
+  // DB에 데이터가 없으면 즉시 첫 스크래핑 실행
+  if (!cachedData) {
+    console.log('캐시 데이터 없음, 초기 스크래핑 시작...');
+    backgroundRefresh();
+  }
 }
 
 startServer();

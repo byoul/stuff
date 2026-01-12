@@ -44,8 +44,8 @@ function App() {
     setInitialLoading(false)
   }
 
-  // 새로고침: SSE로 실시간 스크래핑
-  const fetchRestaurants = () => {
+  // 빠른 새로고침: 예약 관련 식당만 업데이트
+  const quickRefresh = () => {
     setRefreshing(true)
     setError(null)
     setProgress({ message: '서버 연결 중...', current: 0, total: 0 })
@@ -54,7 +54,7 @@ function App() {
       eventSourceRef.current.close()
     }
 
-    const eventSource = new EventSource(`${API_URL}/api/restaurants/stream`)
+    const eventSource = new EventSource(`${API_URL}/api/restaurants/quick-refresh`)
     eventSourceRef.current = eventSource
 
     eventSource.onmessage = (event) => {
@@ -86,7 +86,7 @@ function App() {
   }
 
   const refresh = () => {
-    fetchRestaurants()
+    quickRefresh()
   }
 
   // 당장 예약 가능 여부 (예약 가능한 날짜가 있는 경우)
