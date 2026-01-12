@@ -35,12 +35,35 @@ function App() {
     fetchRestaurants()
   }
 
+  // 현장 웨이팅 여부 판단
+  const isWalkIn = (r) => {
+    return !r.availableDates?.length &&
+           !r.reservationStatus &&
+           !r.reservationOpenTime &&
+           !r.reservationPeriod
+  }
+
+  // 예약 가능 여부 판단
+  const isReservable = (r) => {
+    return r.availableDates?.length > 0 ||
+           (r.reservationStatus && !r.reservationStatus.includes('마감')) ||
+           r.reservationOpenTime ||
+           r.reservationPeriod
+  }
+
   const filtered = restaurants.filter(r => {
     if (filter === 'available') {
-      return r.availableDates?.length > 0 || !r.reservationStatus?.includes('마감')
+      return isReservable(r)
+    }
+    if (filter === 'walkin') {
+      return isWalkIn(r)
     }
     return true
   })
+
+  // 각 탭의 개수 계산
+  const availableCount = restaurants.filter(r => isReservable(r)).length
+  const walkInCount = restaurants.filter(r => isWalkIn(r)).length
 
   return (
     <div className="container">
@@ -50,18 +73,24 @@ function App() {
       </header>
 
       <div className="controls">
-        <div className="filters">
+        <div className="tabs">
           <button
             className={filter === 'all' ? 'active' : ''}
             onClick={() => setFilter('all')}
           >
-            전체 ({restaurants.length})
+            전체 <span className="count">{restaurants.length}</span>
           </button>
           <button
             className={filter === 'available' ? 'active' : ''}
             onClick={() => setFilter('available')}
           >
-            예약 가능
+            예약 가능 <span className="count">{availableCount}</span>
+          </button>
+          <button
+            className={filter === 'walkin' ? 'active' : ''}
+            onClick={() => setFilter('walkin')}
+          >
+            현장 웨이팅 <span className="count">{walkInCount}</span>
           </button>
         </div>
         <button className="refresh-btn" onClick={refresh} disabled={loading}>

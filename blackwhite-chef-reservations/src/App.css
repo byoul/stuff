@@ -9,7 +9,7 @@ body {
 }
 
 .container {
-  max-width: 1200px;
+  max-width: 1600px;
   margin: 0 auto;
   padding: 20px;
 }
@@ -39,29 +39,50 @@ header h1 {
   gap: 10px;
 }
 
-.filters {
+.tabs {
   display: flex;
-  gap: 8px;
+  gap: 4px;
+  background: #e5e5e5;
+  padding: 4px;
+  border-radius: 12px;
 }
 
-.filters button {
-  padding: 8px 16px;
-  border: 1px solid #ddd;
-  background: white;
-  border-radius: 20px;
+.tabs button {
+  padding: 10px 20px;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
   cursor: pointer;
   font-size: 14px;
+  font-weight: 500;
+  color: #666;
   transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.filters button:hover {
-  border-color: #333;
+.tabs button:hover {
+  color: #333;
 }
 
-.filters button.active {
+.tabs button.active {
+  background: white;
+  color: #1a1a1a;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.tabs button .count {
+  background: #f0f0f0;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tabs button.active .count {
   background: #1a1a1a;
   color: white;
-  border-color: #1a1a1a;
 }
 
 .refresh-btn {
@@ -117,8 +138,26 @@ header h1 {
 
 .restaurant-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 20px;
+}
+
+@media (min-width: 768px) {
+  .restaurant-list {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .restaurant-list {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1400px) {
+  .restaurant-list {
+    grid-template-columns: repeat(4, 1fr);
+  }
 }
 
 .restaurant-card {
@@ -275,7 +314,7 @@ header h1 {
   background: #333;
 }
 
-@media (max-width: 600px) {
+@media (max-width: 767px) {
   .restaurant-list {
     grid-template-columns: 1fr;
   }
@@ -285,7 +324,17 @@ header h1 {
     align-items: stretch;
   }
 
-  .filters {
+  .tabs {
     justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .tabs button {
+    padding: 8px 14px;
+    font-size: 13px;
+  }
+
+  .refresh-btn {
+    width: 100%;
   }
 }
